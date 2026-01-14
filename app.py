@@ -177,7 +177,7 @@ if st.button("📤 제출하기", type="primary"):
                 client = get_connection()
                 
                 # *** 아래 URL을 선생님의 실제 구글 시트 URL로 변경하세요 ***
-                SHEET_URL = "https://docs.google.com/spreadsheets/d/여기에_구글시트_ID_입력"
+                SHEET_URL = "https://docs.google.com/spreadsheets/d/1nfE8lcFRsUfYkdV-tjpsZfFPWER0YeNR2TaxYLH32JY/edit?usp=sharing"
                 
                 sheet = client.open_by_url(SHEET_URL).sheet1
                 
