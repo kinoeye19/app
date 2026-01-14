@@ -57,9 +57,9 @@ def add_item():
         "authors_all": "",
         "author_count": 1,
         "title": "",
-        "journal": "",   # 저널명 / 출판사 / 학술대회명
-        "details": "",   # 권호 / ISBN / 장소
-        "date": ""
+        "journal": "",   
+        "details": "",   
+        "date": datetime.date.today() # 기본값은 오늘 날짜
     })
 
 def remove_item(index):
@@ -80,7 +80,7 @@ for i, item in enumerate(st.session_state.research_items):
             "구분 (선택하면 시트가 자동으로 분류됩니다)", 
             type_options, 
             key=f"type_{i}",
-            index=type_options.index(item["type"]) if item["type"] in type_options else 0
+            index=type_options.index(item["type"]) if isinstance(item["type"], str) and item["type"] in type_options else 0
         )
         
         # 역할 선택
@@ -101,22 +101,22 @@ for i, item in enumerate(st.session_state.research_items):
         with c2:
             author_count = st.number_input("전체 인원 수", min_value=1, value=item.get("author_count", 1), key=f"auth_cnt_{i}")
 
-        # 상세 정보 라벨링 (선택한 유형에 따라 질문이 바뀜)
+        # 상세 정보 라벨링
         if selected_type == "논문":
             lbl_title = "논문 제목"
             lbl_journal = "저널명 (Journal)"
             lbl_detail = "권호 (Vol, No)"
-            lbl_date = "게재년월"
+            lbl_date = "게재일자 (YYYY-MM-DD)"
         elif selected_type == "저서":
             lbl_title = "저서명 (Book Title)"
             lbl_journal = "출판사"
             lbl_detail = "ISBN / 개정판 정보"
-            lbl_date = "출판년월"
+            lbl_date = "출판일자 (YYYY-MM-DD)"
         else:
             lbl_title = "발표 제목"
             lbl_journal = "학술대회명"
             lbl_detail = "개최 장소"
-            lbl_date = "발표일자"
+            lbl_date = "발표일자 (YYYY-MM-DD)"
 
         title = st.text_input(lbl_title, key=f"title_{i}")
         cc1, cc2 = st.columns(2)
@@ -124,7 +124,16 @@ for i, item in enumerate(st.session_state.research_items):
             journal = st.text_input(lbl_journal, key=f"journal_{i}")
         with cc2:
             details = st.text_input(lbl_detail, key=f"detail_{i}")
-        date_val = st.text_input(lbl_date, placeholder="YYYY-MM-DD", key=f"date_{i}")
+        
+        # [변경점] 텍스트 입력 대신 날짜 선택기(Calendar) 사용
+        # 입력받은 값을 YYYY-MM-DD 문자열로 변환하여 저장
+        date_pick = st.date_input(
+            lbl_date, 
+            value=datetime.date.today(), # 기본값
+            key=f"date_pick_{i}",
+            help="달력을 클릭하여 날짜를 선택하세요."
+        )
+        date_str = date_pick.strftime("%Y-%m-%d") # 구글 시트가 좋아하는 형식으로 변환
 
         st.session_state.research_items[i].update({
             "type": selected_type,
@@ -134,12 +143,12 @@ for i, item in enumerate(st.session_state.research_items):
             "title": title,
             "journal": journal,
             "details": details,
-            "date": date_val
+            "date": date_str
         })
 
 st.divider()
 
-# C. 제출 로직 (시트 분산 저장)
+# C. 제출 로직
 if st.button("📤 제출하기", type="primary"):
     if not student_name or not student_id:
         st.error("이름과 학번을 입력해주세요.")
@@ -150,11 +159,13 @@ if st.button("📤 제출하기", type="primary"):
             with st.spinner("구글 시트에 저장 중..."):
                 client = get_connection()
                 
-                # *** URL 수정 필수 ***
+                # *** [중요] 여기에 선생님의 실제 구글 시트 URL을 넣어주세요 ***
+                # 아까 에러의 원인이 이 부분이 수정되지 않아서일 확률이 높습니다!
                 SHEET_URL = "https://docs.google.com/spreadsheets/d/1nfE8lcFRsUfYkdV-tjpsZfFPWER0YeNR2TaxYLH32JY/edit?usp=sharing" 
+                
                 doc = client.open_by_url(SHEET_URL)
 
-                # 유형별 데이터 담을 리스트 준비
+                # 유형별 데이터 리스트
                 rows_paper = []
                 rows_book = []
                 rows_conf = []
@@ -173,11 +184,10 @@ if st.button("📤 제출하기", type="primary"):
                         item["title"],
                         item["journal"],
                         item["details"],
-                        item["date"],
+                        item["date"], # YYYY-MM-DD 형식의 문자열
                         ""
                     ]
                     
-                    # 유형에 따라 다른 리스트에 담기
                     if item["type"] == "논문":
                         rows_paper.append(row)
                     elif item["type"] == "저서":
@@ -185,7 +195,7 @@ if st.button("📤 제출하기", type="primary"):
                     else: # 학술대회 발표
                         rows_conf.append(row)
 
-                # 각 시트에 한꺼번에 저장
+                # 각 시트에 저장
                 if rows_paper:
                     doc.worksheet("논문").append_rows(rows_paper)
                 if rows_book:
@@ -193,11 +203,12 @@ if st.button("📤 제출하기", type="primary"):
                 if rows_conf:
                     doc.worksheet("학술대회").append_rows(rows_conf)
 
-            st.success("✅ 유형별로 시트에 정확히 저장되었습니다!")
+            st.success("✅ 제출 완료! 날짜 형식이 정확하게(YYYY-MM-DD) 저장되었습니다.")
             st.session_state.research_items = []
             st.rerun()
 
         except gspread.WorksheetNotFound:
-            st.error("오류: 구글 시트에 '논문', '저서', '학술대회'라는 이름의 탭이 있는지 확인해주세요.")
+            st.error("오류: 구글 시트에 '논문', '저서', '학술대회' 탭이 만들어져 있는지 확인해주세요.")
         except Exception as e:
             st.error(f"저장 중 오류 발생: {e}")
+            st.warning("팁: 코드 안의 'SHEET_URL'에 실제 구글 시트 주소를 넣으셨는지 꼭 확인해주세요!")
