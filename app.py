@@ -134,7 +134,7 @@ for i, item in enumerate(st.session_state.research_items):
         # [수정됨] 수업 연계 정보 입력란 (2개로 분리)
         st.markdown("---") 
         # 통합 안내 문구
-        st.info("💡 **연구성과물과 연계된 교과명 및 담당 교수자 정보를 입력해주세요.**") 
+        st.info("💡 **연구성과물과 연계된 교과명 및 해당 교과의 교수자 정보를 입력해주세요.**") 
         
         # 두 개의 입력창을 나란히 배치
         col_class, col_prof = st.columns(2)
