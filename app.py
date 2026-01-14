@@ -59,7 +59,9 @@ def add_item():
         "title": "",
         "journal": "",   
         "details": "",   
-        "date": datetime.date.today() # 기본값은 오늘 날짜
+        "date": datetime.date.today(),
+        "class_name": "", # [수정] 교과목명
+        "prof_name": ""   # [수정] 교수명
     })
 
 def remove_item(index):
@@ -125,15 +127,29 @@ for i, item in enumerate(st.session_state.research_items):
         with cc2:
             details = st.text_input(lbl_detail, key=f"detail_{i}")
         
-        # [변경점] 텍스트 입력 대신 날짜 선택기(Calendar) 사용
-        # 입력받은 값을 YYYY-MM-DD 문자열로 변환하여 저장
-        date_pick = st.date_input(
-            lbl_date, 
-            value=datetime.date.today(), # 기본값
-            key=f"date_pick_{i}",
-            help="달력을 클릭하여 날짜를 선택하세요."
-        )
-        date_str = date_pick.strftime("%Y-%m-%d") # 구글 시트가 좋아하는 형식으로 변환
+        # 날짜 선택
+        date_pick = st.date_input(lbl_date, value=datetime.date.today(), key=f"date_pick_{i}")
+        date_str = date_pick.strftime("%Y-%m-%d")
+
+        # [수정됨] 수업 연계 정보 입력란 (2개로 분리)
+        st.markdown("---") 
+        # 통합 안내 문구
+        st.info("💡 **연구성과물과 연계된 교과명 및 담당 교수자 정보를 입력해주세요.**") 
+        
+        # 두 개의 입력창을 나란히 배치
+        col_class, col_prof = st.columns(2)
+        with col_class:
+            class_name = st.text_input(
+                "연계 교과목명", 
+                placeholder="예: 디지털인문학", 
+                key=f"class_name_{i}"
+            )
+        with col_prof:
+            prof_name = st.text_input(
+                "담당 교수", 
+                placeholder="예: 김철수 교수", 
+                key=f"prof_name_{i}"
+            )
 
         st.session_state.research_items[i].update({
             "type": selected_type,
@@ -143,7 +159,9 @@ for i, item in enumerate(st.session_state.research_items):
             "title": title,
             "journal": journal,
             "details": details,
-            "date": date_str
+            "date": date_str,
+            "class_name": class_name, # 저장값 1
+            "prof_name": prof_name    # 저장값 2
         })
 
 st.divider()
@@ -159,13 +177,11 @@ if st.button("📤 제출하기", type="primary"):
             with st.spinner("구글 시트에 저장 중..."):
                 client = get_connection()
                 
-                # *** [중요] 여기에 선생님의 실제 구글 시트 URL을 넣어주세요 ***
-                # 아까 에러의 원인이 이 부분이 수정되지 않아서일 확률이 높습니다!
+                # *** [중요] 구글 시트 URL 꼭 다시 확인해주세요 ***
                 SHEET_URL = "https://docs.google.com/spreadsheets/d/1nfE8lcFRsUfYkdV-tjpsZfFPWER0YeNR2TaxYLH32JY/edit?usp=sharing" 
                 
                 doc = client.open_by_url(SHEET_URL)
 
-                # 유형별 데이터 리스트
                 rows_paper = []
                 rows_book = []
                 rows_conf = []
@@ -184,18 +200,19 @@ if st.button("📤 제출하기", type="primary"):
                         item["title"],
                         item["journal"],
                         item["details"],
-                        item["date"], # YYYY-MM-DD 형식의 문자열
-                        ""
+                        item["date"],
+                        item["class_name"], # [수정] 연계 교과목
+                        item["prof_name"],  # [수정] 담당 교수
+                        "" # 비고
                     ]
                     
                     if item["type"] == "논문":
                         rows_paper.append(row)
                     elif item["type"] == "저서":
                         rows_book.append(row)
-                    else: # 학술대회 발표
+                    else: 
                         rows_conf.append(row)
 
-                # 각 시트에 저장
                 if rows_paper:
                     doc.worksheet("논문").append_rows(rows_paper)
                 if rows_book:
@@ -203,12 +220,11 @@ if st.button("📤 제출하기", type="primary"):
                 if rows_conf:
                     doc.worksheet("학술대회").append_rows(rows_conf)
 
-            st.success("✅ 제출 완료! 날짜 형식이 정확하게(YYYY-MM-DD) 저장되었습니다.")
+            st.success("✅ 제출 완료! 교과목과 담당교수 정보가 정확히 분류되어 저장되었습니다.")
             st.session_state.research_items = []
             st.rerun()
 
         except gspread.WorksheetNotFound:
-            st.error("오류: 구글 시트에 '논문', '저서', '학술대회' 탭이 만들어져 있는지 확인해주세요.")
+            st.error("오류: 구글 시트에 '논문', '저서', '학술대회' 탭이 있는지 확인해주세요.")
         except Exception as e:
             st.error(f"저장 중 오류 발생: {e}")
-            st.warning("팁: 코드 안의 'SHEET_URL'에 실제 구글 시트 주소를 넣으셨는지 꼭 확인해주세요!")
