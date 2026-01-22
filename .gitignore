@@ -6,6 +6,7 @@ secrets.toml
 mail_auto/credentials.json
 mail_auto/token.json
 mail_auto/naver_credentials.json
+mail_auto/client_secret.json
 
 # Python/uv 자동 생성 파일
 .venv/
