@@ -3,10 +3,10 @@ service_account.json
 secrets.toml
 
 # Gmail API 보안 키 (mail_auto 폴더)
-mail_auto/credentials.json
-mail_auto/token.json
-mail_auto/naver_credentials.json
-mail_auto/client_secret.json
+credentials.json
+token.json
+naver_credentials.json
+client_secret.json
 
 # Python/uv 자동 생성 파일
 .venv/

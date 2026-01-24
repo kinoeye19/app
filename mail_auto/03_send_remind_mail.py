@@ -99,7 +99,7 @@ def main():
         """
         
         # 메일 제목 설정
-        subject = f"[긴급] 2025학년도 BK21 참여학생 연구실적 입력 요청 (1/23 마감)" 
+        subject = f"[긴급] {name} 학생, 2025학년도 BK21 참여학생 연구실적 유/무를 입력해주세요 (1/25 마감)" 
 
         # 4. 전송
         if send_mail_module.send_email(NAVER_ID, NAVER_PWD, email, subject, styled_html):
