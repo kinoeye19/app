@@ -194,7 +194,7 @@ def main():
                 <p>아래 링크를 클릭하시면 현재 제출된 상태를 확인하실 수 있습니다.</p>
                 <p><strong>🔗 내 성과 확인하기:</strong> <a href="{link}" target="_blank">{link}</a></p>
                 <br>
-                <p>만약 성과가 있는데 잘못 기입된 경우, <strong>1월 24일(토) 오전까지</strong> 앱을 통해 재입력하시거나 이 메일로 회신 주시기 바랍니다.<br>
+                <p>만약 성과가 있는데 잘못 기입된 경우, <strong>1월 26일(월) 오전까지</strong> 해당 메일로 회신해 주시기 바랍니다.<br>
                 (실적이 없는 것이 맞다면, 별도로 회신하지 않으셔도 됩니다.)</p>
                 <br>
                 <p>감사합니다.<br>
@@ -231,7 +231,7 @@ def main():
                 <ul>
                     <li><strong>내용 확인:</strong> 본인이 수행한 실적 중 빠진 내용이나 오타가 없는지 꼼꼼히 살펴봐 주기 바랍니다.</li>
                     <li><strong>수정 요청:</strong> 파일은 직접 수정할 수 없습니다. 수정이 필요한 경우, <strong>이 메일로 회신</strong>하여 내용을 알려주면 반영하겠습니다.</li>
-                    <li><strong>회신 기한:</strong> <span style="background-color: #ffffcc; font-weight: bold;">1월 24일(토) 오전까지</span> 확인 후 회신해 주기 바랍니다. (수정 사항이 없다면 회신하지 않아도 됩니다.)</li>
+                    <li><strong>회신 기한:</strong> <span style="background-color: #ffffcc; font-weight: bold;">1월 26일(월) 오전까지</span> 확인 후 회신해 주기 바랍니다. (수정 사항이 없다면 회신하지 않아도 됩니다.)</li>
                 </ul>
                 <br>
                 <p>연구단의 원활한 성과 관리를 위해 협조해 주셔서 감사합니다.<br>
