@@ -1,90 +1,123 @@
 import os
 import sys
+import pickle
 from dotenv import load_dotenv
-from oauth2client.service_account import ServiceAccountCredentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
 # 환경변수 로드
 load_dotenv()
 
 # ==========================================
-# ⚙️ 설정 및 경로 (사용자 환경 맞춤)
+# ⚙️ 설정 및 경로 (참조 파일 방식 적용)
 # ==========================================
-# 1. 인증 키 경로 (mail_auto_agent 폴더 참조)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
-JSON_KEY_PATH = os.path.join(PROJECT_ROOT, "mail_auto_agent", "service_account.json")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) # Research_RAG
+PROJECT_ROOT = os.path.dirname(BASE_DIR)              # app
 
-# 2. 원본 파일 ID (.env에서 가져옴)
+# 인증 파일 찾기 (mail_auto 폴더 우선 탐색)
+CLIENT_SECRET_PATH = os.path.join(PROJECT_ROOT, "mail_auto", "client_secret.json")
+TOKEN_PATH = os.path.join(PROJECT_ROOT, "mail_auto", "token.json")
+
+# 만약 mail_auto에 없으면 현재 폴더나 상위 폴더도 확인
+if not os.path.exists(CLIENT_SECRET_PATH):
+    # 백업 경로 확인
+    CLIENT_SECRET_PATH = os.path.join(PROJECT_ROOT, "client_secret.json")
+    TOKEN_PATH = os.path.join(PROJECT_ROOT, "token.json")
+
+# 원본 시트 ID
 SOURCE_FILE_ID = os.getenv("GOOGLE_SHEET_ID")
 
-# 3. 생성할 프로젝트 폴더 및 파일 명칭
+# 프로젝트 폴더/파일 명칭
 PROJECT_FOLDER_NAME = "[Project] R-E_Network_DB (Research-Education Linkage)"
 NEW_FILE_NAME = "MASTER_DATASET_v1 (Do Not Delete)"
 
-# 4. 권한 범위 (드라이브 전체 제어 + 스프레드시트)
+# 권한 범위 (참조 파일과 동일)
 SCOPES = [
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/spreadsheets"
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/spreadsheets'
 ]
 
-def authenticate_drive_api():
-    """구글 드라이브 API 인증 및 서비스 빌드"""
-    if not os.path.exists(JSON_KEY_PATH):
-        print(f"❌ 인증 키 파일이 없습니다: {JSON_KEY_PATH}")
-        sys.exit(1)
-        
-    creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_KEY_PATH, SCOPES)
-    service = build('drive', 'v3', credentials=creds)
-    return service
+def get_credentials():
+    """사용자 계정(OAuth)으로 인증 정보를 가져옵니다."""
+    creds = None
+    
+    # 1. 기존 토큰 파일이 있으면 로드
+    if os.path.exists(TOKEN_PATH):
+        with open(TOKEN_PATH, 'rb') as token:
+            try:
+                # pickle 방식 (참조 파일 방식이 pickle일 경우 대비)
+                # 하지만 json 방식일 수도 있으므로 예외처리 필요
+                creds = pickle.load(token)
+            except:
+                pass
+                
+    # 토큰이 없거나 만료되었으면 새로 로그인
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            # client_secret.json 필수
+            if not os.path.exists(CLIENT_SECRET_PATH):
+                print(f"❌ 'client_secret.json' 파일을 찾을 수 없습니다.")
+                print(f"   경로: {CLIENT_SECRET_PATH}")
+                sys.exit(1)
+                
+            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_PATH, SCOPES)
+            creds = flow.run_local_server(port=0)
+            
+        # 새로운 토큰 저장 (다음엔 로그인 안 해도 되게)
+        with open(TOKEN_PATH, 'wb') as token:
+            pickle.dump(creds, token)
+            
+    return creds
 
 def find_or_create_folder(service, folder_name):
     """폴더가 있으면 ID 반환, 없으면 만들고 ID 반환"""
-    # 1. 폴더 검색 (삭제되지 않은(trashed=false) 폴더 중 이름 일치)
     query = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false"
     results = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
     files = results.get('files', [])
 
     if files:
-        print(f"📂 기존 프로젝트 폴더를 찾았습니다: {files[0]['name']} (ID: {files[0]['id']})")
+        print(f"📂 기존 프로젝트 폴더를 찾았습니다: {files[0]['name']}")
         return files[0]['id']
     else:
-        # 2. 없으면 생성
         file_metadata = {
             'name': folder_name,
             'mimeType': 'application/vnd.google-apps.folder'
         }
         folder = service.files().create(body=file_metadata, fields='id').execute()
-        print(f"✨ 새 프로젝트 폴더를 생성했습니다: {folder_name} (ID: {folder.get('id')})")
+        print(f"✨ 새 프로젝트 폴더를 생성했습니다: {folder_name}")
         return folder.get('id')
 
 def copy_file_to_folder(service, file_id, folder_id, new_name):
-    """파일을 특정 폴더로 복사하고 이름 변경"""
-    # 원본 파일 정보 확인
+    """파일 복사 (사용자 계정 용량 사용)"""
+    if not file_id:
+        print("❌ .env 파일에 GOOGLE_SHEET_ID가 없습니다.")
+        sys.exit(1)
+
+    # 원본 확인
     try:
         origin = service.files().get(fileId=file_id).execute()
         print(f"📄 원본 파일 확인됨: {origin.get('name')}")
     except Exception as e:
-        print(f"❌ 원본 파일을 찾을 수 없습니다. .env의 GOOGLE_SHEET_ID를 확인하세요.\n오류: {e}")
+        print(f"❌ 원본 파일 접근 불가 (ID 확인 필요): {e}")
         sys.exit(1)
 
-    # 복사 메타데이터 설정 (부모 폴더 지정, 이름 변경)
     file_metadata = {
         'name': new_name,
         'parents': [folder_id]
     }
     
     try:
-        # 파일 복사 실행
         copied_file = service.files().copy(
             fileId=file_id,
             body=file_metadata,
             fields='id, name, webViewLink'
         ).execute()
         
-        print(f"\n✅ 데이터 복제 성공!")
+        print(f"\n✅ 데이터 복제 성공! (사용자 계정 용량 사용)")
         print(f"   - 파일명: {copied_file.get('name')}")
-        print(f"   - 위치: {PROJECT_FOLDER_NAME} 폴더 내부")
         print(f"   - 링크: {copied_file.get('webViewLink')}")
         return copied_file.get('id')
         
@@ -93,10 +126,11 @@ def copy_file_to_folder(service, file_id, folder_id, new_name):
         sys.exit(1)
 
 def main():
-    print("🚀 [초기화] 연구-교육 네트워크 DB 구축을 시작합니다...")
+    print("🚀 [초기화] 연구-교육 네트워크 DB 구축 (OAuth 모드)...")
     
-    # 1. API 연결
-    service = authenticate_drive_api()
+    # 1. 사용자 인증 (브라우저 로그인 or 토큰)
+    creds = get_credentials()
+    service = build('drive', 'v3', credentials=creds)
     
     # 2. 프로젝트 폴더 확보
     folder_id = find_or_create_folder(service, PROJECT_FOLDER_NAME)
@@ -104,13 +138,14 @@ def main():
     # 3. 데이터셋 안전 복제
     new_file_id = copy_file_to_folder(service, SOURCE_FILE_ID, folder_id, NEW_FILE_NAME)
     
-    # 4. 다음 단계를 위한 안내
-    print("\n" + "="*50)
-    print("📌 [중요] 다음 단계(데이터 수집)를 위해 아래 내용을 참고하세요.")
-    print(f"새로 생성된 마스터 데이터 시트 ID: {new_file_id}")
-    print("👉 .env 파일의 'GOOGLE_SHEET_ID'를 위 ID로 변경하면,")
-    print("   원본 손상 없이 안전하게 스크래핑 작업을 진행할 수 있습니다.")
-    print("="*50)
+    # 4. 결과 안내
+    print("\n" + "="*60)
+    print("📌 [중요] .env 파일 업데이트")
+    print("-" * 60)
+    print(f"GOOGLE_SHEET_ID={new_file_id}")
+    print("-" * 60)
+    print("위 ID를 .env 파일에 붙여넣어 주세요.")
+    print("="*60)
 
 if __name__ == "__main__":
     main()
