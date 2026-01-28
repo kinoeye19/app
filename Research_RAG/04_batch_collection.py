@@ -1,12 +1,11 @@
 import os
 import sys
 import time
-import json
 import re
-import requests
 import pickle
 import gspread
-from urllib.parse import urlparse, parse_qs
+import difflib
+import urllib.parse
 from dotenv import load_dotenv
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -35,7 +34,6 @@ if not os.path.exists(CLIENT_SECRET_PATH):
     TOKEN_PATH = os.path.join(PROJECT_ROOT, "token.json")
 
 SHEET_ID = os.getenv("TARGET_SHEET_ID") 
-SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 SCOPES = [
     "https://www.googleapis.com/auth/drive",
@@ -64,89 +62,98 @@ def get_gspread_client():
             creds = flow.run_local_server(port=0)
         with open(TOKEN_PATH, 'wb') as token:
             pickle.dump(creds, token)
-
     return gspread.authorize(creds)
 
-def clean_brackets(text):
-    """괄호()와 대괄호[] 및 그 안의 내용을 제거"""
-    # 1. 괄호 내용 제거
-    cleaned = re.sub(r'\([^)]*\)', '', text)
-    cleaned = re.sub(r'\[[^\]]*\]', '', cleaned)
-    # 2. 다중 공백 제거
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    
-    # 만약 괄호 제거 후 내용이 너무 짧아지면(예: 전체가 괄호였음) 원본 반환
-    if len(cleaned) < 2:
-        return text
-    return cleaned
+def clean_text_for_compare(text):
+    # 한글, 영문, 숫자만 남기고 나머지 제거
+    text = re.sub(r'[^\w\s]', '', text)
+    return text.replace(" ", "").lower()
 
-def extract_main_title(title):
-    """부제 구분자(:, -, = 등) 앞쪽만 추출"""
-    main_title = re.split(r'[:\-\=]', title)[0]
-    return main_title.strip()
+def calculate_similarity(s1, s2):
+    c1 = clean_text_for_compare(s1)
+    c2 = clean_text_for_compare(s2)
+    if not c1 or not c2: return 0.0
+    return difflib.SequenceMatcher(None, c1, c2).ratio()
 
 def get_riss_id_from_url(url):
     try:
-        parsed = urlparse(url)
-        qs = parse_qs(parsed.query)
-        if 'control_no' in qs:
-            return qs['control_no'][0]
-    except:
-        pass
+        parsed = urllib.parse.urlparse(url)
+        qs = urllib.parse.parse_qs(parsed.query)
+        if 'control_no' in qs: return qs['control_no'][0]
+    except: pass
     return ""
 
 # ==========================================
-# 🔍 4단계 스마트 검색 로직
+# 🔍 RISS 검색 로직 (전수 조사 방식)
 # ==========================================
 
-def search_riss_link_smart(title, author):
-    url = "https://google.serper.dev/search"
-    headers = {'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json'}
+def search_riss_direct(driver, user_title, author):
+    # 검색 URL
+    encoded_query = urllib.parse.quote(user_title)
+    search_url = f"https://www.riss.kr/search/Search.do?isDetailSearch=N&searchGubun=true&strQuery={encoded_query}&query={encoded_query}&colName=all"
+    
+    driver.get(search_url)
+    
+    # [중요] 페이지 로딩 대기 (3초)
+    time.sleep(3) 
 
-    # 검색 후보군 생성
     candidates = []
     
-    # 1단계: 원본 엄격 검색 ("제목")
-    candidates.append({"q": f'site:riss.kr "{title}" {author}', "type": "1.엄격(원본)"})
-    
-    # 2단계: 원본 유연 검색 (제목 - 따옴표 제거) -> 특수문자/띄어쓰기 무시
-    candidates.append({"q": f'site:riss.kr {title} {author}', "type": "2.유연(원본)"})
-    
-    # 3단계: 괄호 청소 검색 (한자 병기 제거)
-    cleaned_title = clean_brackets(title)
-    if cleaned_title != title:
-        candidates.append({"q": f'site:riss.kr {cleaned_title} {author}', "type": "3.유연(괄호제거)"})
-    
-    # 4단계: 메인 제목 검색 (부제 제거)
-    main_title = extract_main_title(title)
-    # 메인 제목이 원본/청소본과 다르고, 2글자 이상일 때만
-    if main_title != title and main_title != cleaned_title and len(main_title) >= 2:
-        candidates.append({"q": f'site:riss.kr {main_title} {author}', "type": "4.유연(부제제거)"})
-
-    # 순차 실행
-    for item in candidates:
-        query = item['q']
-        q_type = item['type']
+    try:
+        # [핵심 변경] 화면의 "모든 링크(a tag)"를 싹 다 긁어옵니다.
+        # CSS 선택자에 의존하지 않습니다.
+        all_links = driver.find_elements(By.TAG_NAME, "a")
         
-        # 쿼리 길이 제한 (Serper 오류 방지)
-        if len(query) > 300: query = query[:300]
+        # 긁어온 수백 개의 링크 중 '제목'일 것 같은 놈만 골라냅니다.
+        for el in all_links:
+            try:
+                text = el.text.strip()
+                link = el.get_attribute("href")
+                
+                # 1. 텍스트가 너무 짧거나(메뉴바 등) 없으면 패스
+                if not text or len(text) < 5: continue
+                
+                # 2. 링크가 없거나 자바스크립트면 패스 (단, RISS는 상세페이지에 javascript를 쓰지 않음)
+                if not link or "javascript" in link: continue
+                
+                # 3. RISS 상세페이지 URL 특징 확인 (DetailView)
+                if "DetailView" not in link: continue
 
-        print(f"   🔎 시도 [{q_type}]: {query.replace('site:riss.kr', '').strip()[:40]}...")
-        
-        try:
-            payload = json.dumps({"q": query, "num": 3, "gl": "kr", "hl": "ko"})
-            resp = requests.post(url, headers=headers, data=payload).json()
-            
-            for res in resp.get("organic", []):
-                link = res.get("link", "")
-                if "riss.kr" in link and "DetailView" in link:
-                    print(f"   ✨ 발견 성공! ({q_type})")
-                    return link
-            time.sleep(0.5) # API 속도 조절
-        except Exception as e:
-            print(f"   ⚠️ 검색 API 에러: {e}")
+                # 4. 유사도 검사
+                score = calculate_similarity(user_title, text)
+                
+                # 유사도가 일정 수준 이상인 것만 후보 등록
+                if score > 0.3:
+                     # URL 절대경로 보정
+                    if not link.startswith("http"):
+                        link = "https://www.riss.kr" + link
+                        
+                    candidates.append({
+                        "link": link,
+                        "title": text,
+                        "score": score
+                    })
+            except:
+                continue
 
-    return None
+    except Exception as e:
+        pass
+
+    if not candidates:
+        return None
+
+    # 점수순 정렬
+    candidates.sort(key=lambda x: x['score'], reverse=True)
+    best = candidates[0]
+    
+    # 가장 높은 점수가 40% 이상이면 채택
+    if best['score'] >= 0.4: 
+        print(f"   🎯 RISS 발견: {best['title'][:15]}... ({int(best['score']*100)}%)")
+        return best['link']
+    else:
+        # 디버깅: 가장 비슷했던 게 뭐였는지 출력
+        print(f"   💨 유사도 낮음 (최고: {int(best['score']*100)}% - '{best['title']}')")
+        return None
 
 def scrape_riss_details(driver, url):
     data = {"abstract": "", "keywords": "", "id": ""}
@@ -154,23 +161,18 @@ def scrape_riss_details(driver, url):
 
     try:
         driver.get(url)
-        wait = WebDriverWait(driver, 5)
-        # 본문 로딩 대기
-        try: wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.wrapper")))
-        except: pass
-
-        # '더보기' 버튼들 클릭
+        time.sleep(2)
+        
         try:
             buttons = driver.find_elements(By.CSS_SELECTOR, "a.moreView, a.btn_more")
             for btn in buttons:
                 if btn.is_displayed():
                     driver.execute_script("arguments[0].click();", btn)
-                    time.sleep(0.1)
+                    time.sleep(0.5)
         except: pass
         
         full_text = driver.find_element(By.TAG_NAME, "body").text
         
-        # 초록 추출
         if "국문초록" in full_text:
             temp = full_text.split("국문초록")[1]
             data["abstract"] = temp.split("목차")[0] if "목차" in temp else temp[:1500]
@@ -181,7 +183,6 @@ def scrape_riss_details(driver, url):
             try: data["abstract"] = driver.find_element(By.CSS_SELECTOR, "div.additionalInfo").text
             except: data["abstract"] = "초록 없음"
 
-        # 주제어 추출
         try:
             lines = full_text.split('\n')
             for line in lines:
@@ -220,7 +221,6 @@ def main():
         print(f"❌ 시트 연결 실패: {e}")
         return
 
-    # 헤더 설정
     headers = worksheet.row_values(1)
     new_cols = ["논문ID", "RISS_링크", "초록", "주제어"]
     for col_name in new_cols:
@@ -234,15 +234,17 @@ def main():
     idx_kw = headers.index("주제어") + 1
 
     rows = worksheet.get_all_records()
-    print(f"📊 총 {len(rows)}건 작업 시작...\n")
+    print(f"📊 총 {len(rows)}건 작업 시작 (전수 조사 모드)...\n")
 
-    # 브라우저 옵션
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
+    driver.set_window_size(1200, 900)
+
+    consecutive_failures = 0
 
     for i, row in enumerate(rows):
         row_num = i + 2
@@ -251,20 +253,19 @@ def main():
         author = str(row.get("이름", "")).strip()
         existing_link = str(row.get("RISS_링크", ""))
 
-        # 이미 링크가 있으면 건너뜀 (단, '검색실패'라고 적힌 건 다시 시도)
         if title and existing_link and "http" in existing_link:
             continue
         if not title:
             continue
 
-        print(f"[{i+1}/{len(rows)}] 🔍 {title} ({author})")
+        print(f"[{i+1}/{len(rows)}] 🔍 {title[:20]}... ({author})")
         
-        # 스마트 검색 실행
-        link = search_riss_link_smart(title, author)
+        link = search_riss_direct(driver, title, author)
         
         if link:
+            consecutive_failures = 0
             details = scrape_riss_details(driver, link)
-            print(f"   ✅ 수집 완료: ID({details['id']}) / 키워드({details['keywords'][:10]}...)")
+            print(f"   ✅ 수집: ID({details['id']}) / 주제어({details['keywords'][:10]}...)")
             
             try:
                 worksheet.update_cell(row_num, idx_id, details['id'])
@@ -274,16 +275,21 @@ def main():
             except Exception as e:
                 print(f"   ❌ 저장 실패: {e}")
         else:
-            print("   ⚠️ 모든 검색 시도 실패")
-            # 확실히 실패했을 때만 기록
+            consecutive_failures += 1
+            print(f"   ⚠️ 검색 실패 (연속 {consecutive_failures}회)")
             if not existing_link:
                 try: worksheet.update_cell(row_num, idx_link, "검색실패")
                 except: pass
-            
-        time.sleep(2) # 차단 방지
+        
+        if consecutive_failures >= 3: # 3회로 완화
+            print("\n" + "="*50)
+            print("🚨 [중단] 연속 3회 실패. RISS 접근이 차단되었거나 페이지 구조가 완전히 다릅니다.")
+            print("="*50)
+            break
+        
+        time.sleep(2)
 
     driver.quit()
-    print("\n🎉 모든 작업 완료!")
 
 if __name__ == "__main__":
     main()
